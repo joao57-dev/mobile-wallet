@@ -1,0 +1,241 @@
+source 'https://github.com/CocoaPods/Specs.git'
+
+require File.join(File.dirname(`node --print "require.resolve('expo/package.json')"`), "scripts/autolinking")
+require File.join(File.dirname(`node --print "require.resolve('react-native/package.json')"`), "scripts/react_native_pods")
+
+require 'json'
+podfile_properties = JSON.parse(File.read(File.join(__dir__, 'Podfile.properties.json'))) rescue {}
+
+def node_require(script)
+   # Resolve script with node to allow for hoisting
+   require Pod::Executable.execute_command('node', ['-p',
+     "require.resolve(
+       '#{script}',
+       {paths: [process.argv[1]]},
+     )", __dir__]).strip
+ end
+
+def min_ios_version_supported
+  require 'json'
+
+  # Read the version from React Native's config (go up one level to project root)
+  react_native_package = JSON.parse(File.read(File.join(__dir__, '..', 'package.json')))
+  react_version = react_native_package['dependencies']['react-native']
+
+  # For React Native 0.79+ with New Architecture, minimum is 16.0
+  return '16.0'
+end
+
+node_require('react-native/scripts/react_native_pods.rb')
+node_require('react-native-permissions/scripts/setup.rb')
+
+ENV['RCT_NEW_ARCH_ENABLED'] = podfile_properties['newArchEnabled'] == 'true' ? '1' : '0'
+ENV['EX_DEV_CLIENT_NETWORK_INSPECTOR'] = podfile_properties['EX_DEV_CLIENT_NETWORK_INSPECTOR']
+
+platform :ios, podfile_properties['ios.deploymentTarget'] || min_ios_version_supported
+install! 'cocoapods',
+  :deterministic_uuids => false
+
+prepare_react_native_project!
+
+
+# ⬇️ uncomment wanted permissions
+setup_permissions([
+  'AppTrackingTransparency',
+  # 'Bluetooth',
+  # 'Calendars',
+  # 'CalendarsWriteOnly',
+  'Camera',
+  # 'Contacts',
+  'FaceID',
+  # 'LocationAccuracy',
+  # 'LocationAlways',
+  # 'LocationWhenInUse',
+  # 'MediaLibrary',
+  'Microphone',
+  # 'Motion',
+  'Notifications',
+  # 'PhotoLibrary',
+  # 'PhotoLibraryAddOnly',
+  # 'Reminders',
+  # 'Siri',
+  # 'SpeechRecognition',
+  # 'StoreKit',
+])
+target 'SphereonWallet' do
+  use_expo_modules!
+# @generated begin @animo-id/expo-ausweis-sdk - expo prebuild (DO NOT MODIFY) sync-f7defb8a7e68494511942d008678677bd68dc108
+source 'https://github.com/animo/expo-ausweis-sdk'
+source 'https://cdn.cocoapods.org'
+# @generated end @animo-id/expo-ausweis-sdk
+  config = use_native_modules!
+
+  use_frameworks! :linkage => podfile_properties['ios.useFrameworks'].to_sym if podfile_properties['ios.useFrameworks']
+  use_frameworks! :linkage => ENV['USE_FRAMEWORKS'].to_sym if ENV['USE_FRAMEWORKS']
+
+  use_react_native!(
+    :path => config[:reactNativePath],
+    :hermes_enabled => true,
+                    # podfile_properties['expo.jsEngine'] == nil || podfile_properties['expo.jsEngine'] == 'hermes',
+    # An absolute path to your application root.
+    :app_path => "#{Pod::Config.instance.installation_root}/..",
+    :privacy_file_aggregation_enabled => podfile_properties['apple.privacyManifestAggregationEnabled'] != 'false',
+  )
+
+  pod 'musap-ios', :path => '../node_modules/@sphereon/musap-native'
+  pod 'musap-react-native', :path => '../node_modules/@sphereon/musap-react-native' # auto-linking not working on expo app for some reason
+  pod 'YubiKit', :modular_headers => true
+
+#  permissions_path = '../node_modules/react-native-permissions/ios'
+
+#    pod 'Permission-AppTrackingTransparency', :path => "#{permissions_path}/AppTrackingTransparency"
+#    pod 'Permission-BluetoothPeripheral', :path => "#{permissions_path}/BluetoothPeripheral"
+#    pod 'Permission-Calendars', :path => "#{permissions_path}/Calendars"
+#    pod 'Permission-Camera', :path => "#{permissions_path}/Camera"
+#    pod 'Permission-Contacts', :path => "#{permissions_path}/Contacts"
+#    pod 'Permission-FaceID', :path => "#{permissions_path}/FaceID"
+#    pod 'Permission-LocationAccuracy', :path => "#{permissions_path}/LocationAccuracy"
+#    pod 'Permission-LocationAlways', :path => "#{permissions_path}/LocationAlways"
+#    pod 'Permission-LocationWhenInUse', :path => "#{permissions_path}/LocationWhenInUse"
+#    pod 'Permission-MediaLibrary', :path => "#{permissions_path}/MediaLibrary"
+#    pod 'Permission-Microphone', :path => "#{permissions_path}/Microphone"
+#    pod 'Permission-Motion', :path => "#{permissions_path}/Motion"
+#    pod 'Permission-Notifications', :path => "#{permissions_path}/Notifications"
+#    pod 'Permission-PhotoLibrary', :path => "#{permissions_path}/PhotoLibrary"
+#    pod 'Permission-PhotoLibraryAddOnly', :path => "#{permissions_path}/PhotoLibraryAddOnly"
+#    pod 'Permission-Reminders', :path => "#{permissions_path}/Reminders"
+#    pod 'Permission-Siri', :path => "#{permissions_path}/Siri"
+#    pod 'Permission-SpeechRecognition', :path => "#{permissions_path}/SpeechRecognition"
+#    pod 'Permission-StoreKit', :path => "#{permissions_path}/StoreKit"
+#    pod 'CatCrypto', :git => 'https://github.com/Sphereon-Opensource/CatCrypto'
+
+  post_install do |installer|
+    react_native_post_install(
+      installer,
+      config[:reactNativePath],
+      :mac_catalyst_enabled => false,
+      :ccache_enabled => podfile_properties['apple.ccacheEnabled'] == 'true',
+    )
+
+    # CRITICAL: Remove glog module.modulemap to prevent C++ module namespace issues
+    # The error "import of module 'glog.glog.log_severity' appears within namespace 'google'"
+    # occurs because glog's modulemap conflicts with #include inside a namespace
+    glog_modulemap = File.join(installer.sandbox.root, 'glog', 'module.modulemap')
+    if File.exist?(glog_modulemap)
+      File.delete(glog_modulemap)
+      Pod::UI.puts "Removed glog module.modulemap to fix C++ namespace issues"
+    end
+
+    # Also remove glog modulemap from Headers/Public if it exists
+    glog_public_modulemap = File.join(installer.sandbox.root, 'Headers', 'Public', 'glog', 'module.modulemap')
+    if File.exist?(glog_public_modulemap)
+      File.delete(glog_public_modulemap)
+    end
+
+    # Work around an fmt 11.0.2 bug on Xcode 26 / Apple Clang 21: fmt marks its
+    # basic_format_string constructor `consteval`, and the compiler's stricter
+    # constant-expression enforcement then rejects fmt's own internal FMT_STRING(...)
+    # calls in format-inl.h ("Call to consteval function ... is not a constant
+    # expression"). base.h defines FMT_USE_CONSTEVAL=1 unconditionally when
+    # __cpp_consteval is present (no #ifndef guard), so a -DFMT_USE_CONSTEVAL=0
+    # build flag is overridden. Patch the header to force it off right before it is
+    # consumed, falling back to runtime format-string checking. Fixed upstream in fmt 11.1.
+    fmt_base = File.join(installer.sandbox.root, 'fmt', 'include', 'fmt', 'base.h')
+    if File.exist?(fmt_base)
+      contents = File.read(fmt_base)
+      marker = "#if FMT_USE_CONSTEVAL\n#  define FMT_CONSTEVAL consteval"
+      override = "#undef FMT_USE_CONSTEVAL\n#define FMT_USE_CONSTEVAL 0\n"
+      if !contents.include?(override) && contents.include?(marker)
+        contents = contents.sub(marker, override + marker)
+        File.chmod(0644, fmt_base) # fmt ships its headers read-only
+        File.write(fmt_base, contents)
+        Pod::UI.puts "Patched fmt base.h to disable consteval (Xcode 26 / Clang 21 workaround)"
+      end
+    end
+
+    # Force iOS 16.0 deployment target for all pods
+    # Required for C++ features like CxxStdlib
+    installer.generated_projects.each do |project|
+      project.targets.each do |target|
+        target.build_configurations.each do |config|
+          config.build_settings['IPHONEOS_DEPLOYMENT_TARGET'] = '16.0'
+          config.build_settings['CLANG_ALLOW_NON_MODULAR_INCLUDES_IN_FRAMEWORK_MODULES'] = 'YES'
+
+          # Define FOLLY_NO_CONFIG to skip folly-config.h which isn't generated
+          # Define FOLLY_CFG_NO_COROUTINES to skip coroutine support
+          defs = config.build_settings['GCC_PREPROCESSOR_DEFINITIONS'] || ['$(inherited)']
+          %w[FOLLY_NO_CONFIG=1 FOLLY_MOBILE=1 FOLLY_CFG_NO_COROUTINES=1].each do |d|
+            defs << d unless defs.include?(d)
+          end
+          config.build_settings['GCC_PREPROCESSOR_DEFINITIONS'] = defs
+
+          # Disable sized deallocation to fix folly/lang/New.h compilation with Xcode 16
+          cxxflags = config.build_settings['OTHER_CPLUSPLUSFLAGS'] || '$(inherited)'
+          cxxflags = cxxflags.is_a?(Array) ? cxxflags : cxxflags.split(' ')
+          cxxflags = cxxflags.reject { |f| f.include?('-DNDEBUG') }
+          cxxflags << '-fno-sized-deallocation' unless cxxflags.include?('-fno-sized-deallocation')
+          config.build_settings['OTHER_CPLUSPLUSFLAGS'] = cxxflags
+
+          # Remove -DNDEBUG from OTHER_CFLAGS to prevent 'NDEBUG macro redefined' error
+          # (Xcode already defines NDEBUG for Release via built-in settings)
+          if config.name == 'Release'
+            cflags = config.build_settings['OTHER_CFLAGS']
+            if cflags
+              cflags = cflags.is_a?(Array) ? cflags : cflags.split(' ')
+              cflags = cflags.reject { |f| f == '-DNDEBUG' }
+              config.build_settings['OTHER_CFLAGS'] = cflags
+            end
+          end
+
+          # Disable C++ modules entirely - use textual includes instead
+          # This is the most reliable fix for glog namespace issues
+          config.build_settings['CLANG_ENABLE_MODULES'] = 'YES'
+          config.build_settings['CLANG_ENABLE_MODULE_DEBUGGING'] = 'NO'
+
+          # Do NOT enable Swift-C++ interop for musap-ios or YubiKit
+          # They use Objective-C bridge pattern instead
+          if target.name.include?('musap-ios') || target.name.include?('YubiKit')
+            config.build_settings['BUILD_LIBRARY_FOR_DISTRIBUTION'] = 'NO'
+          end
+        end
+      end
+    end
+
+    # This is necessary for Xcode 14, because it signs resource bundles by default
+    # when building for devices.
+    installer.target_installation_results.pod_target_installation_results
+      .each do |pod_name, target_installation_result|
+      target_installation_result.resource_bundle_targets.each do |resource_bundle_target|
+        resource_bundle_target.build_configurations.each do |config|
+          config.build_settings['CODE_SIGNING_ALLOWED'] = 'NO'
+        end
+      end
+    end
+
+  end
+
+  post_integrate do |installer|
+    begin
+      expo_patch_react_imports!(installer)
+    rescue => e
+      Pod::UI.warn e
+    end
+
+    # Remove all NDEBUG definitions from xcconfig files to fix 'NDEBUG macro redefined' build error.
+    # The compiler already defines NDEBUG for Release builds via Xcode's built-in settings.
+    # RNReanimated's GCC_PREPROCESSOR_DEFINITIONS[config=Release] adds a duplicate NDEBUG=1,
+    # and OTHER_C*FLAGS may also add -DNDEBUG, causing redefinition errors.
+    Dir.glob(File.join(installer.sandbox.root, 'Target Support Files', '**', '*.xcconfig')).each do |xcconfig_path|
+      content = File.read(xcconfig_path)
+      modified = content
+      # Remove -DNDEBUG from OTHER_CFLAGS / OTHER_CPLUSPLUSFLAGS
+      modified = modified.gsub(/ -DNDEBUG(?!=)/, '')
+      # Remove NDEBUG=1 from GCC_PREPROCESSOR_DEFINITIONS lines
+      modified = modified.gsub(/ NDEBUG=1/, '')
+      if modified != content
+        File.write(xcconfig_path, modified)
+        Pod::UI.puts "Removed NDEBUG definitions from #{File.basename(xcconfig_path)}"
+      end
+    end
+  end
+end

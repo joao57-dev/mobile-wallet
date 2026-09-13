@@ -1,0 +1,58 @@
+import React, {FC} from 'react';
+import {ColorValue, GestureResponderEvent, TouchableOpacity, TouchableOpacityProps, View, ViewStyle} from 'react-native';
+
+import {HIT_SLOP_DISTANCE} from '../../../@config/constants';
+import SSIBackIcon from '../../../components/assets/icons/SSIBackIcon';
+import SSIMoreIcon from '../../../components/assets/icons/SSIMoreIcon';
+import {ButtonIconsEnum} from '../../../types';
+import ChevronIcon from '../../assets/icons/ChevronIcon';
+import SSICloseIcon from '../../assets/icons/SSICloseIcon';
+import SearchIcon from '../../assets/icons/SearchIcon';
+
+export interface Props extends TouchableOpacityProps {
+  icon: ButtonIconsEnum;
+  onPress: ((e: GestureResponderEvent) => Promise<void>) | ((e: GestureResponderEvent) => void);
+  disabled?: boolean;
+  style?: ViewStyle;
+  iconSize?: number;
+  iconColor?: ColorValue;
+}
+
+// TODO add feedback to button
+const SSIIconButton: FC<Props> = ({style, onPress, disabled, icon, iconSize, iconColor, ...rest}: Props): JSX.Element => {
+  return (
+    <TouchableOpacity
+      accessibilityRole="button"
+      style={style}
+      onPress={onPress}
+      disabled={disabled}
+      hitSlop={{
+        top: HIT_SLOP_DISTANCE,
+        bottom: HIT_SLOP_DISTANCE,
+        left: HIT_SLOP_DISTANCE,
+        right: HIT_SLOP_DISTANCE,
+      }}
+      {...rest}>
+      {getIcon(icon, iconSize, iconColor)}
+    </TouchableOpacity>
+  );
+};
+
+const getIcon = (icon: ButtonIconsEnum, size?: number, color?: ColorValue): JSX.Element => {
+  switch (icon) {
+    case ButtonIconsEnum.BACK:
+      return <SSIBackIcon />;
+    case ButtonIconsEnum.MORE:
+      return <SSIMoreIcon />;
+    case ButtonIconsEnum.CLOSE:
+      return <SSICloseIcon size={size} color={color} />;
+    case ButtonIconsEnum.SEARCH:
+      return <SearchIcon size={size} color={color} />;
+    case ButtonIconsEnum.CHEVRON:
+      return <ChevronIcon size={size} color={color} />;
+    default:
+      return <View />;
+  }
+};
+
+export default SSIIconButton;

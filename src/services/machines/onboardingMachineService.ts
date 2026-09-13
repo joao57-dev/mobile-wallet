@@ -1,0 +1,352 @@
+import {CredentialCorrelationType, DigitalCredential, Party, RegulationType} from '@sphereon/ssi-sdk.data-store-types';
+import {ActionType, CredentialMapper, CredentialRole, DefaultActionSubType, InitiatorType, LogLevel, SubSystem, System} from '@sphereon/ssi-types';
+import {_ExtendedIKey, computeEntryHash} from '@veramo/utils';
+import agent, {agentContext} from '../../agent';
+import store from '../../store';
+import {createUser, login} from '../../store/actions/user.actions';
+import {BasicUser, IUser} from '../../types';
+import {USERS_LOADING} from '../../types/store/user.action.types';
+import {MappedCredential} from '../../types/machines/getPIDCredentialMachine';
+import {OnboardingMachineContext, OnboardingMachineEventTypes, WalletSetupServiceResult} from '../../types/machines/onboarding';
+import {generateDigest, getCredentialSubjectContact} from '../../utils';
+import {storagePersistPin} from '../storageService';
+import {PartyCorrelationType} from '@sphereon/ssi-sdk.core';
+import {storeActivityLogging} from '../../store/actions/logging.actions';
+import {ESIMActivationMachine} from '../../machines/activateESimMachine';
+import {OnboardingMachine} from '../../machines/onboardingMachine';
+import {CredentialPayload, IIdentifier, VerifiableCredential} from '@veramo/core';
+import {toCredentialSummary} from '@sphereon/ui-components.credential-branding';
+import PersonalIdentificationDataBranding from '../../@config/branding/PersonalIdentificationDataBranding.json';
+import SphereonWalletIdentityBranding from '../../@config/branding/SphereonWalletIdentityBranding.json';
+import {getOrCreatePrimaryIdentifier} from '../identityService';
+import {getFirstKeyWithRelation} from '@sphereon/ssi-sdk-ext.did-utils';
+import {storeVerifiableCredential} from '../credentialService';
+import {Platform} from 'react-native';
+import {SupportedDidMethodEnum} from '../../types';
+import {v4 as uuidv4} from 'uuid';
+import {deleteVerifiableCredential, getVerifiableCredentialsFromStorage} from '../credentialService';
+import {updateUserInfo} from '../../store/actions/user.actions';
+import {getVerifiableCredentials} from '../../store/actions/credential.actions';
+import {getContacts} from '../../store/actions/contact.actions';
+import {CredentialPayload as CredentialPayloadType} from '@veramo/core';
+
+const DEFAULT_CREDENTIAL_DATA = {
+  didMethod: SupportedDidMethodEnum.DID_JWK,
+  didOptions: {type: 'Secp256r1'},
+  proofFormat: 'jwt' as const,
+  credential: {
+    vct: 'SphereonWalletIdentityCredential',
+    id: `urn:uuid:${uuidv4()}`,
+    issuanceDate: new Date(),
+    credentialSubject: {},
+  } as Partial<CredentialPayloadType>,
+};
+
+export const retrievePIDCredentials = async (context: Pick<OnboardingMachineContext, 'funkeProvider'>): Promise<Array<MappedCredential>> => {
+  const {funkeProvider} = context;
+
+  if (!funkeProvider?.refreshUrl) {
+    return Promise.reject(Error('Missing ausweis refresh url in context'));
+  }
+
+  return funkeProvider
+    .getAuthorizationCode()
+    .then((authorizationCode: string) => funkeProvider.getPids({authorizationCode}))
+    .then(pidResponses => {
+      return pidResponses.map(pidResponse => {
+        const credential = pidResponse.credentials?.find(c => c); // FIXME
+        const identifier = pidResponse.identifier;
+        const rawCredential = typeof credential === 'string' ? credential : JSON.stringify(credential);
+        const uniformCredential = CredentialMapper.toUniformCredential(rawCredential, {hasher: generateDigest});
+
+        return {
+          uniformCredential,
+          rawCredential,
+          identifier,
+        };
+      });
+    });
+};
+
+export const storePIDCredentials = async (context: Pick<OnboardingMachineContext, 'pidCredentials'>): Promise<Array<DigitalCredential>> => {
+  const {pidCredentials} = context;
+
+  let parentId: string | undefined = undefined;
+  let parentCredentialHash: string | undefined = undefined;
+  const storeCredentials: DigitalCredential[] = [];
+  for (const mappedCredential of pidCredentials) {
+    const digitalCredential = await agent.crsAddCredential({
+      credential: {
+        parentId,
+        regulationType: RegulationType.PID, // FIXME FUNKE
+        rawDocument: mappedCredential.rawCredential,
+        credentialRole: CredentialRole.HOLDER,
+        credentialId: mappedCredential.uniformCredential.id ?? computeEntryHash(mappedCredential.rawCredential),
+        kmsKeyRef: mappedCredential.identifier?.kmsKeyRef ?? 'FIXME',
+        identifierMethod: mappedCredential.identifier?.method ?? 'jwk',
+        issuerCorrelationId: 'https://demo.pid-issuer.bundesdruckerei.de',
+        issuerCorrelationType: CredentialCorrelationType.X509_SAN,
+      },
+      opts: {hasher: generateDigest},
+    });
+
+    storeCredentials.push(digitalCredential);
+
+    const uniform = JSON.parse(digitalCredential.uniformDocument) as VerifiableCredential;
+    const issuerCorrelationId: string = typeof uniform.issuer === 'string' ? uniform.issuer : uniform.issuer?.id ?? uniform.issuer?.name;
+    const getContactsArgs = {
+      filter: [{identities: {identifier: {correlationId: issuerCorrelationId}}}],
+    };
+    const issuer: Party | undefined = (await agent.cmGetContacts(getContactsArgs))[0];
+    const credentialSummary = await toCredentialSummary({
+      verifiableCredential: uniform,
+      hash: digitalCredential.hash,
+      credentialRole: uniform.credentialRole,
+      issuer,
+      branding: [PersonalIdentificationDataBranding],
+      subject: getCredentialSubjectContact(uniform),
+    });
+
+    store.dispatch<any>(
+      storeActivityLogging({
+        level: LogLevel.INFO,
+        system: System.OID4VCI,
+        subSystemType: SubSystem.VC_ISSUER,
+        initiatorType: InitiatorType.SYSTEM,
+        description: 'storePIDCredentials function call',
+        actionType: ActionType.CREATE,
+        actionSubType: DefaultActionSubType.VC_ISSUE,
+        diagnosticData: {digitalCredential},
+        // @ts-ignore
+        credentialType: digitalCredential.documentFormat, // TODO fix types
+        credentialHash: digitalCredential.hash,
+        parentCredentialHash,
+        originalCredential: JSON.stringify(digitalCredential),
+        data: {
+          credential: credentialSummary,
+        },
+        partyCorrelationType: PartyCorrelationType.URL,
+        partyCorrelationId: 'https://demo.pid-issuer.bundesdruckerei.de',
+        partyAlias: 'Bundesdruckerei GmbH',
+      }),
+    );
+
+    if (!parentId) {
+      parentId = digitalCredential.id;
+      parentCredentialHash = digitalCredential.hash;
+    }
+  }
+
+  return storeCredentials;
+};
+
+export const setupWallet = async (
+  context: Pick<
+    OnboardingMachineContext,
+    'pinCode' | 'emailAddress' | 'name' | 'biometricsEnabled' | 'pidCredentials' | 'countryCode' | 'language' | 'credentialData'
+  >,
+): Promise<WalletSetupServiceResult> => {
+  const {pinCode} = context;
+
+  const setup = await Promise.all([
+    storagePersistPin({
+      value: pinCode,
+    }),
+    createSelfIssuedCredential(context).then(credential =>
+      agent.ibAddCredentialBranding({
+        vcHash: credential.hash,
+        issuerCorrelationId: credential.issuerCorrelationId,
+        localeBranding: [SphereonWalletIdentityBranding],
+      }),
+    ),
+    storeUser(context),
+    // Make sure we never finish before the timeout, to ensure the UI doesn't navigate too fast for a user between screens
+    new Promise(resolve => setTimeout(() => resolve(true), 1000)),
+  ]);
+
+  // Set loading=true BEFORE clearing the machine singleton. This prevents a race
+  // where walletAuthLockState re-evaluates between clearInstance (hasInstance()=false)
+  // and the login thunk's USERS_LOADING dispatch, which would briefly make
+  // shouldOnboard=false + loading=false + isAuthenticated=false → LOCKED, or worse,
+  // allow the navigation to briefly remount the onboarding stack showing the Welcome screen.
+  store.dispatch({type: USERS_LOADING});
+  OnboardingMachine.clearInstance({stop: false});
+  await store.dispatch<any>(login(setup[2].storedUser.id));
+  return setup[2];
+};
+
+export const createSelfIssuedCredential = async (
+  context: Pick<OnboardingMachineContext, 'emailAddress' | 'name' | 'credentialData'>,
+): Promise<DigitalCredential> => {
+  const {emailAddress, name, credentialData} = context;
+
+  if (Platform.OS === 'android') {
+    await fetch('https://sphereon.com/content/themes/sphereon/assets/favicons/site.webmanifest'); // @FIXME SSISDK-7  We need a fetch, otherwise we have an issue with BouncyCastle and https links later on (yes really)!
+  }
+
+  const identifier: IIdentifier = await getOrCreatePrimaryIdentifier(
+    {
+      method: credentialData.didMethod,
+      createOpts: {options: credentialData.didOptions},
+    },
+    agentContext,
+  );
+
+  const names = parseFullName(name);
+
+  const cred: Partial<CredentialPayload> | undefined = credentialData.credential;
+  const ctx = {...agent?.context, agent};
+  const key: _ExtendedIKey | undefined = await getFirstKeyWithRelation({identifier, vmRelationship: 'assertionMethod'}, ctx);
+  const resolution = await agent.identifierManagedGetByDid({identifier: identifier.did, kmsKeyRef: key.kid});
+  const verifiableCredential = await agent.createSdJwtVc({
+    credentialPayload: {
+      ...cred?.credentialSubject,
+      vct: cred?.type?.[0] ?? 'SphereonWalletIdentityCredential',
+      id: identifier.did,
+      iss: (cred?.issuer as string | undefined) ?? identifier.did,
+      sub: (cred?.credentialSubject?.id as string | undefined) ?? identifier.did,
+      iat: Math.floor(Date.now() / 1000),
+      emailAddress,
+      firstName: names.firstName,
+      ...(names.lastName && {lastName: names.lastName}),
+      cnf: {
+        jwk: resolution.jwk,
+        ...(resolution.kid && {kid: resolution.kid}),
+      },
+    },
+    disclosureFrame: {_sd: ['id', 'sub', 'emailAddress', 'firstName', 'lastName']},
+    resolution,
+  });
+  return storeVerifiableCredential({
+    credentialRole: CredentialRole.HOLDER,
+    issuerCorrelationId: identifier.did,
+    issuerCorrelationType: CredentialCorrelationType.DID,
+    vc: verifiableCredential.credential,
+    kmsKeyRef: key.kid,
+  });
+};
+
+export const reissueWalletIdentityCredential = async (args: {
+  firstName: string;
+  lastName: string;
+  emailAddress: string;
+}): Promise<void> => {
+  const activeUser = store.getState().user.activeUser!;
+
+  // Find and delete old wallet identity credential
+  const creds = await getVerifiableCredentialsFromStorage();
+  const walletCred = creds.find(c => activeUser.identifiers.some(id => id.did === c.digitalCredential.issuerCorrelationId));
+  if (walletCred?.digitalCredential?.hash) {
+    await deleteVerifiableCredential({hash: walletCred.digitalCredential.hash});
+  }
+
+  // Create new credential with updated data
+  const newCred = await createSelfIssuedCredential({
+    emailAddress: args.emailAddress,
+    name: `${args.firstName} ${args.lastName}`.trim(),
+    credentialData: DEFAULT_CREDENTIAL_DATA,
+  });
+
+  // Add branding
+  await agent.ibAddCredentialBranding({
+    vcHash: newCred.hash,
+    issuerCorrelationId: newCred.issuerCorrelationId,
+    localeBranding: [SphereonWalletIdentityBranding],
+  });
+
+  // Update user record
+  const updatedUser = {...activeUser, ...args};
+  await store.dispatch<any>(updateUserInfo(updatedUser));
+
+  // Refresh contacts (rebuilds user contact with updated displayName) then credentials
+  await store.dispatch<any>(getContacts());
+  await store.dispatch<any>(getVerifiableCredentials());
+};
+
+const storeUser = async (
+  context: Pick<OnboardingMachineContext, 'emailAddress' | 'name' | 'biometricsEnabled' | 'pidCredentials' | 'countryCode' | 'language'>,
+): Promise<WalletSetupServiceResult> => {
+  const {emailAddress, name, biometricsEnabled, countryCode, language} = context;
+
+  const names = parseFullName(name);
+
+  const user: BasicUser = {
+    firstName: names.firstName,
+    lastName: names.lastName,
+    emailAddress,
+    biometricsEnabled,
+    countryCode: countryCode,
+    language: language ?? undefined,
+  };
+
+  const storedUser: IUser = await store.dispatch<any>(createUser(user));
+  return {storedUser};
+};
+
+const parseFullName = (fullName: string) => {
+  const nameParts = fullName.trim().split(/\s+/);
+
+  if (nameParts.length === 0) {
+    return {firstName: 'Unknown', lastName: 'Unknown'};
+  }
+
+  if (nameParts.length === 1) {
+    return {firstName: nameParts[0], lastName: ''}; // Profile icon supports just 1 letter
+  }
+
+  const firstName = nameParts[0];
+  const lastName = nameParts.slice(1).join(' ');
+
+  return {firstName, lastName};
+};
+
+export const storeCredentialBranding = async (context: Pick<OnboardingMachineContext, 'pidCredentials'>): Promise<void> => {
+  const {pidCredentials} = context;
+
+  const storeCredentials = pidCredentials.map((mappedCredential: MappedCredential) =>
+    agent.ibAddCredentialBranding({
+      vcHash: computeEntryHash(mappedCredential.rawCredential),
+      issuerCorrelationId: 'https://demo.pid-issuer.bundesdruckerei.de',
+      localeBranding: [PersonalIdentificationDataBranding],
+    }),
+  );
+
+  await Promise.all(storeCredentials);
+};
+
+export const activateESim = async (context: OnboardingMachineContext, event: OnboardingMachineEventTypes): Promise<void> => {
+  console.log('Starting activateESim service with context:', context);
+
+  return new Promise((resolve, reject) => {
+    try {
+      // Create a new instance of the ESIMActivationMachine
+      const esimMachineInstance = ESIMActivationMachine.newInstance();
+      console.log('Created ESIMActivationMachine instance');
+
+      esimMachineInstance.onDone(doneEvent => {
+        console.log('ESIMActivationMachine done:', doneEvent);
+        resolve(doneEvent.data);
+      });
+      esimMachineInstance.onTransition(state => {
+        console.log('OnboardingMachine<->ESIMActivationMachine state transition:', state.value);
+        if (state.matches('success')) {
+          console.log('ESIMActivationMachine ended successfully');
+          context.esimActivationAborted = false;
+          resolve();
+        } else if (state.matches('abort')) {
+          context.esimActivationAborted = true;
+          resolve();
+        } else if (state.matches('handleError') || state.matches('error')) {
+          console.error('ESIMActivationMachine error:', state.context.error);
+          context.esimActivationAborted = false;
+          reject(state.context.error);
+        }
+      });
+      esimMachineInstance.start();
+      console.log('Started ESIMActivationMachine');
+    } catch (error) {
+      console.error('activateESim service error:', error);
+      reject(error);
+    }
+  });
+};

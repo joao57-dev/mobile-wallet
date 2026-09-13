@@ -1,0 +1,69 @@
+{
+  "expo": {
+    "name": "SphereonWallet",
+    "slug": "SphereonWallet",
+    "version": "0.9.0",
+    "orientation": "portrait",
+    "entryPoint": "index.js",
+    "scheme": "com.sphereon.ssi.wallet",
+    "updates": {
+      "fallbackToCacheTimeout": 0
+    },
+    "jsEngine": "hermes",
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.sphereon.ssi.wallet",
+      "useFrameworks": "static",
+      "associatedDomains": ["applinks:sphereon.com"],
+      "infoPlist": {
+        "NSCameraUsageDescription": "Camera is used to scan QR codes for receiving and presenting credentials"
+      }
+    },
+    "android": {
+      "package": "com.sphereon.ssi.wallet",
+      "intentFilters": [
+        {
+          "action": "VIEW",
+          "autoVerify": true,
+          "data": [
+            {
+              "scheme": "https",
+              "host": "sphereon.com",
+              "pathPrefix": "/ssi-wallet"
+            }
+          ],
+          "category": ["BROWSABLE", "DEFAULT"]
+        }
+      ]
+    },
+    "androidNavigationBar": {
+      "barStyle": "light-content",
+      "backgroundColor": "#202537"
+    },
+    "extra": {
+      "eas": {
+        "projectId": "76b1c6a4-d1d8-421e-8514-ee9db0b197b4"
+      }
+    },
+    "plugins": [
+      "@animo-id/expo-ausweis-sdk",
+      [
+        "expo-build-properties",
+        {
+          "android": {
+            "minSdkVersion": 31,
+            "useLegacyPackaging": true,
+            "newArchEnabled": true
+          },
+          "ios": {
+            "newArchEnabled": true,
+            "deploymentTarget": "16.0"
+          }
+        }
+      ],
+      "expo-asset",
+      "expo-localization",
+      "./withSphereonWalletPods"
+    ]
+  }
+}

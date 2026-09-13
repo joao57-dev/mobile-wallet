@@ -1,0 +1,56 @@
+diff --git a/dist/browser/package.json b/dist/browser/package.json
+index 8fb7e8f..b3c6c1d 100644
+--- a/dist/browser/package.json
++++ b/dist/browser/package.json
+@@ -1 +1,18 @@
+-{"type":"module","sideEffects":false}
++{
++  "type": "module",
++  "sideEffects": false,
++  "react-native": {
++    "crypto": "react-native-crypto",
++    "os": "react-native-os",
++    "path": "path-browserify",
++    "fs": "expo-fs",
++    "vm": "vm-browserify"
++  },
++  "browser": {
++    "crypto": "react-native-crypto",
++    "os": "react-native-os",
++    "path": "path-browserify",
++    "fs": "expo-fs",
++    "vm": "vm-browserify"
++  }
++}
+diff --git a/dist/browser/runtime/webcrypto.js b/dist/browser/runtime/webcrypto.js
+index f9e1e91..7eed959 100644
+--- a/dist/browser/runtime/webcrypto.js
++++ b/dist/browser/runtime/webcrypto.js
+@@ -1,2 +1,2 @@
+ export default crypto;
+-export const isCryptoKey = (key) => key instanceof CryptoKey;
++export const isCryptoKey = (key) => typeof key === 'object';
+diff --git a/dist/node/esm/package.json b/dist/node/esm/package.json
+index 8fb7e8f..b3c6c1d 100644
+--- a/dist/node/esm/package.json
++++ b/dist/node/esm/package.json
+@@ -1 +1,18 @@
+-{"type":"module","sideEffects":false}
++{
++  "type": "module",
++  "sideEffects": false,
++  "react-native": {
++    "crypto": "react-native-crypto",
++    "os": "react-native-os",
++    "path": "path-browserify",
++    "fs": "expo-fs",
++    "vm": "vm-browserify"
++  },
++  "browser": {
++    "crypto": "react-native-crypto",
++    "os": "react-native-os",
++    "path": "path-browserify",
++    "fs": "expo-fs",
++    "vm": "vm-browserify"
++  }
++}

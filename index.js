@@ -1,0 +1,24 @@
+import 'reflect-metadata'; // needed for typeorm migrations
+import { shim } from 'react-native-quick-base64';
+shim()
+import 'react-native-get-random-values';
+import 'react-native-url-polyfill/auto';
+// exports.url = require.resolve("url/");
+import './shim';
+import '@ethersproject/shims';
+import 'text-encoding';
+import 'react-native-gesture-handler';
+import 'react-native-url-polyfill/auto'; // Applying the polyfill for URL from lib.dom
+// if (typeof BigInt === 'undefined') global.BigInt = require('big-integer')
+import {registerRootComponent} from 'expo';
+
+import App from './App';
+
+// registerRootComponent calls AppRegistry.registerComponent('main', () => App);
+// It also ensures that whether you load the app in Expo Go or in a native build,
+// the environment is set up appropriately
+registerRootComponent(App);
+
+import {AppRegistry} from 'react-native';
+import DCApiApp from './src/screens/DCApiApp';
+AppRegistry.registerComponent('DCApiApp', () => DCApiApp);

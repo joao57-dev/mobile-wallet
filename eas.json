@@ -1,0 +1,27 @@
+{
+  "cli": {
+    "version": "^16.0"
+  },
+  "build": {
+    "base": {
+      "node": "20.19.3"
+    },
+    "preview": {
+      "extends": "base",
+      "android": {
+        "buildType": "apk"
+      }
+    },
+    "preview2": {
+      "android": {
+        "gradleCommand": ":app:assembleRelease"
+      }
+    },
+    "preview3": {
+      "developmentClient": true
+    },
+    "production": {
+      "extends": "base"
+    }
+  }
+}
